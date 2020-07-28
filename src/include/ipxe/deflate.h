@@ -19,6 +19,8 @@ enum deflate_format {
 	DEFLATE_RAW,
 	/** ZLIB header and footer */
 	DEFLATE_ZLIB,
+	/** GZIP header and footer */
+	DEFLATE_GZIP,
 };
 
 /** Block header length (in bits) */
@@ -110,6 +112,34 @@ enum deflate_format {
 
 /** ZLIB ADLER32 length (in bits) */
 #define ZLIB_ADLER32_BITS 32
+
+/** GZIP header length (in bytes) */
+#define GZIP_HEADER_BYTES 10
+
+/** GZIP header compression method: DEFLATE */
+#define GZIP_HEADER_CM_DEFLATE 8
+
+/** GZIP header flags */
+#define GZIP_HEADER_FLG_FTEXT    0x01
+#define GZIP_HEADER_FLG_FHCRC    0x02
+#define GZIP_HEADER_FLG_FEXTRA   0x04
+#define GZIP_HEADER_FLG_FNAME    0x08
+#define GZIP_HEADER_FLG_FCOMMENT 0x10
+
+/** GZIP header XLEN bytes */
+#define GZIP_HEADER_XLEN_BYTES 2
+
+/** GZIP header FHCRC bytes */
+#define GZIP_HEADER_FHCRC_BYTES 2
+
+/** GZIP footer CRC32 bytes */
+#define GZIP_FOOTER_CRC32_BYTES 4
+
+/** GZIP footer ISIZE bytes */
+#define GZIP_FOOTER_ISIZE_BYTES 4
+
+/** GZIP Window size--must be a power of two, and at least 32K */
+#define GZIP_WSIZE 0x8000  
 
 /** A Huffman-coded set of symbols of a given length */
 struct deflate_huf_symbols {
@@ -235,6 +265,19 @@ struct deflate {
 	uint8_t lengths[ ( ( DEFLATE_LITLEN_MAX_CODE + 1 ) +
 			   ( DEFLATE_DISTANCE_MAX_CODE + 1 ) +
 			   1 /* round up */ ) / 2 ];
+
+	/** ZLIB/GZIP checksum */
+	uint32_t checksum;
+
+	/** Total inflated length */
+	unsigned int total_length;
+	
+	/** Window buffer needed for gzip
+	 * This should be allocated by the caller in the length of 
+	 * GZIP_WSIZE before calling deflate_inflate () when 
+	 * decompressing GZIP streams.
+	 */
+	userptr_t window;
 };
 
 /** A chunk of data */
