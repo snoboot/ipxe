@@ -68,9 +68,15 @@ static int ( * is_autoboot_device ) ( struct net_device *netdev );
 #define EINFO_ENOENT_BOOT \
 	__einfo_uniqify ( EINFO_ENOENT, 0x01, "Nothing to boot" )
 
-#define NORMAL	"\033[0m"
-#define BOLD	"\033[1m"
-#define CYAN	"\033[36m"
+#if AUTOBOOT_DISABLE_ANSI
+# define NORMAL
+# define BOLD
+# define CYAN
+#else
+# define NORMAL	"\033[0m"
+# define BOLD	"\033[1m"
+# define CYAN	"\033[36m"
+#endif
 
 /** The "scriptlet" setting */
 const struct setting scriptlet_setting __setting ( SETTING_MISC, scriptlet ) = {
