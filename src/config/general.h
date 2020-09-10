@@ -11,6 +11,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <config/defaults.h>
 
+// Disable ANSI colors at boot (interferes with TTL serial console)
+//#define AUTOBOOT_DISABLE_ANSI 1
+
 /*
  * Banner timeout configuration
  *
