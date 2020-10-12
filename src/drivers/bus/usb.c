@@ -818,6 +818,7 @@ int usb_control ( struct usb_device *usb, unsigned int request,
 				       "failed: %s\n", usb->name, request,
 				       value, index, strerror ( rc ) );
 				free_iob ( cmplt );
+				usb_endpoint_reset ( ep );
 				return rc;
 			}
 
@@ -912,9 +913,15 @@ int usb_get_string_descriptor ( struct usb_device *usb, unsigned int index,
 					 sizeof ( *desc ) ) ) != 0 )
 		goto err_get_descriptor;
 
-	/* Copy to buffer */
+	/* Calculate string length */
+	if ( desc->header.len < sizeof ( desc->header ) ) {
+		rc = -EINVAL;
+		goto err_len;
+	}
 	actual = ( ( desc->header.len - sizeof ( desc->header ) ) /
 		   sizeof ( desc->character[0] ) );
+
+	/* Copy to buffer */
 	for ( i = 0 ; ( ( i < actual ) && ( i < max ) ) ; i++ )
 		buf[i] = le16_to_cpu ( desc->character[i] );
 	if ( len )
@@ -925,6 +932,7 @@ int usb_get_string_descriptor ( struct usb_device *usb, unsigned int index,
 
 	return actual;
 
+ err_len:
  err_get_descriptor:
 	free ( desc );
  err_alloc:
@@ -1635,6 +1643,11 @@ static void unregister_usb ( struct usb_device *usb ) {
 	struct usb_hub *hub = port->hub;
 	struct io_buffer *iobuf;
 	struct io_buffer *tmp;
+
+	DBGC ( usb, "USB %s addr %d %04x:%04x class %d:%d:%d removed\n",
+	       usb->name, usb->address, le16_to_cpu ( usb->device.vendor ),
+	       le16_to_cpu ( usb->device.product ), usb->device.class.class,
+	       usb->device.class.subclass, usb->device.class.protocol );
 
 	/* Sanity checks */
 	assert ( port->usb == usb );
