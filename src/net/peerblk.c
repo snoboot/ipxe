@@ -108,17 +108,33 @@ FILE_SECBOOT ( PERMITTED );
 static struct profiler peerblk_download_profiler __profiler =
 	{ .name = "peerblk.download" };
 
-/** PeerDist block download attempt success profiler */
-static struct profiler peerblk_attempt_success_profiler __profiler =
-	{ .name = "peerblk.attempt.success" };
+/** PeerDist block raw origin server download success profiler */
+static struct profiler peerblk_origin_success_profiler __profiler =
+	{ .name = "peerblk.origin.success" };
 
-/** PeerDist block download attempt failure profiler */
-static struct profiler peerblk_attempt_failure_profiler __profiler =
-	{ .name = "peerblk.attempt.failure" };
+/** PeerDist block raw origin server download failure profiler */
+static struct profiler peerblk_origin_failure_profiler __profiler =
+	{ .name = "peerblk.origin.failure" };
+
+/** PeerDist block retrieval protocol download success profiler */
+static struct profiler peerblk_peer_success_profiler __profiler =
+	{ .name = "peerblk.peer.success" };
+
+/** PeerDist block retrieval protocol download failure profiler */
+static struct profiler peerblk_peer_failure_profiler __profiler =
+	{ .name = "peerblk.peer.failure" };
+
+/** PeerDist block local cache download success profiler */
+static struct profiler peerblk_cache_success_profiler __profiler =
+	{ .name = "peerblk.cache.success" };
+
+/** PeerDist block local cache download failure profiler */
+static struct profiler peerblk_cache_failure_profiler __profiler =
+	{ .name = "peerblk.cache.failure" };
 
 /** PeerDist block download attempt timeout profiler */
-static struct profiler peerblk_attempt_timeout_profiler __profiler =
-	{ .name = "peerblk.attempt.timeout" };
+static struct profiler peerblk_timeout_profiler __profiler =
+	{ .name = "peerblk.timeout" };
 
 /** PeerDist block download discovery success profiler */
 static struct profiler peerblk_discovery_success_profiler __profiler =
@@ -300,8 +316,28 @@ static void peerblk_done ( struct peerdist_block *peerblk, int rc ) {
 	struct peerdisc_segment *segment = peerblk->discovery.segment;
 	struct peerdisc_peer *head;
 	struct peerdisc_peer *peer;
+	struct profiler *success;
+	struct profiler *failure;
 	uint8_t hash[digest->digestsize];
 	unsigned long now = peerblk_timestamp();
+
+	/* Identify peer (if any) and profilers */
+	head = list_entry ( &segment->peers, struct peerdisc_peer, list );
+	peer = ( ( peerblk->peer == head ) ? NULL : peerblk->peer );
+	if ( peer && ( peer->retrieval == &peerdist_post ) ) {
+		/* Retrieval protocol via POST: probably a real peer */
+		success = &peerblk_peer_success_profiler;
+		failure = &peerblk_peer_failure_profiler;
+	} else if ( peer && ( peer->retrieval == &peerdist_get ) ) {
+		/* Retrieval protocol but not POST: probably local cache */
+		success = &peerblk_cache_success_profiler;
+		failure = &peerblk_cache_failure_profiler;
+	} else {
+		/* No peer: origin server range request */
+		assert ( ! peer );
+		success = &peerblk_origin_success_profiler;
+		failure = &peerblk_origin_failure_profiler;
+	}
 
 	/* Check for errors on completion */
 	if ( rc != 0 ) {
@@ -323,12 +359,9 @@ static void peerblk_done ( struct peerdist_block *peerblk, int rc ) {
 	}
 
 	/* Profile successful attempt */
-	profile_custom ( &peerblk_attempt_success_profiler,
-			 ( now - peerblk->attempted ) );
+	profile_custom ( success, ( now - peerblk->attempted ) );
 
 	/* Report peer statistics */
-	head = list_entry ( &segment->peers, struct peerdisc_peer, list );
-	peer = ( ( peerblk->peer == head ) ? NULL : peerblk->peer );
 	peerdisc_stat ( &peerblk->xfer, peer, &segment->peers );
 
 	/* Close download */
@@ -337,8 +370,7 @@ static void peerblk_done ( struct peerdist_block *peerblk, int rc ) {
 
  err:
 	/* Record failure reason and schedule a retry attempt */
-	profile_custom ( &peerblk_attempt_failure_profiler,
-			 ( now - peerblk->attempted ) );
+	profile_custom ( failure, ( now - peerblk->attempted ) );
 	peerblk_reset ( peerblk, rc );
 	peerblk->rc = rc;
 	start_timer_nodelay ( &peerblk->timer );
@@ -571,85 +603,45 @@ static struct peerdist_block_queue peerblk_raw_queue = {
 
 /******************************************************************************
  *
- * Retrieval protocol block download attempts (using HTTP POST)
+ * Retrieval protocol block download attempts
  *
  ******************************************************************************
  */
 
 /**
- * Construct PeerDist retrieval protocol URI
- *
- * @v location		Peer location
- * @ret uri		Retrieval URI, or NULL on error
- */
-static struct uri * peerblk_retrieval_uri ( const char *location ) {
-	char uri_string[ 7 /* "http://" */ + strlen ( location ) +
-			 sizeof ( PEERDIST_MAGIC_PATH /* includes NUL */ ) ];
-
-	/* Construct URI string */
-	snprintf ( uri_string, sizeof ( uri_string ),
-		   ( "http://%s" PEERDIST_MAGIC_PATH ), location );
-
-	/* Parse URI string */
-	return parse_uri ( uri_string );
-}
-
-/**
  * Open PeerDist retrieval protocol block download attempt
  *
  * @v peerblk		PeerDist block download
+ * @v retrieval		Retrieval protocol
  * @v location		Peer location
  * @ret rc		Return status code
  */
 static int peerblk_retrieval_open ( struct peerdist_block *peerblk,
+				    struct peerdist_retrieval *retrieval,
 				    const char *location ) {
 	size_t digestsize = peerblk->digestsize;
-	peerdist_msg_getblks_t ( digestsize, 1, 0 ) req;
 	peerblk_msg_blk_t ( digestsize, 0, 0, 0 ) *rsp;
-	struct http_request_content content;
-	struct uri *uri;
 	int rc;
 
-	DBGC2 ( peerblk, "PEERBLK %p %d.%d attempting retrieval from %s\n",
-		peerblk, peerblk->segment, peerblk->block, location );
+	DBGC2 ( peerblk, "PEERBLK %p %d.%d attempting %s retrieval from %s\n",
+		peerblk, peerblk->segment, peerblk->block, retrieval->name,
+		location );
 
-	/* Construct block fetch request */
-	memset ( &req, 0, sizeof ( req ) );
-	req.getblks.hdr.version.raw = htonl ( PEERDIST_MSG_GETBLKS_VERSION );
-	req.getblks.hdr.type = htonl ( PEERDIST_MSG_GETBLKS_TYPE );
-	req.getblks.hdr.len = htonl ( sizeof ( req ) );
-	req.getblks.hdr.algorithm = htonl ( PEERDIST_MSG_AES_128_CBC );
-	req.segment.segment.digestsize = htonl ( digestsize );
-	memcpy ( req.segment.id, peerblk->id, digestsize );
-	req.ranges.ranges.count = htonl ( 1 );
-	req.ranges.range[0].first = htonl ( peerblk->block );
-	req.ranges.range[0].count = htonl ( 1 );
-
-	/* Construct POST request content */
-	memset ( &content, 0, sizeof ( content ) );
-	content.data = &req;
-	content.len = sizeof ( req );
-
-	/* Construct URI */
-	if ( ( uri = peerblk_retrieval_uri ( location ) ) == NULL ) {
-		rc = -ENOMEM;
-		goto err_uri;
+	/* Open connection */
+	if ( ( rc = retrieval->open ( &peerblk->retrieval, location,
+				      digestsize, peerblk->id,
+				      peerblk->block ) ) != 0 ) {
+		DBGC ( peerblk, "PEERBLK %p %d.%d could not create %s "
+		       "retrieval request: %s\n", peerblk, peerblk->segment,
+		       peerblk->block, retrieval->name, strerror ( rc ) );
+		return rc;
 	}
 
-	/* Update trim thresholds */
+	/* Update trim thresholds for retrieval protocol format */
 	peerblk->start += offsetof ( typeof ( *rsp ), msg.vrf );
 	peerblk->end += offsetof ( typeof ( *rsp ), msg.vrf );
 
-	/* Initiate HTTP POST to retrieve block */
-	if ( ( rc = http_open ( &peerblk->retrieval, &http_post, uri,
-				NULL, &content ) ) != 0 ) {
-		DBGC ( peerblk, "PEERBLK %p %d.%d could not create retrieval "
-		       "request: %s\n", peerblk, peerblk->segment,
-		       peerblk->block, strerror ( rc ) );
-		goto err_open;
-	}
-
-	/* Annul HTTP connection (for testing) if applicable.  Do not
+	/* Annul connection (for testing) if applicable.  Do not
 	 * report as an immediate error, in order to test our ability
 	 * to recover from a totally unresponsive HTTP server.
 	 */
@@ -660,10 +652,7 @@ static int peerblk_retrieval_open ( struct peerdist_block *peerblk,
 	peerblk->rc = -ETIMEDOUT;
 	start_timer_fixed ( &peerblk->timer, PEERBLK_RETRIEVAL_OPEN_TIMEOUT );
 
- err_open:
-	uri_put ( uri );
- err_uri:
-	return rc;
+	return 0;
 }
 
 /**
@@ -1125,8 +1114,15 @@ static void peerblk_decrypt ( struct peerdist_block *peerblk ) {
 	void *data;
 	int rc;
 
-	/* Sanity check */
+	/* Sanity checks */
 	assert ( ( PEERBLK_DECRYPT_CHUNKSIZE % cipher->blocksize ) == 0 );
+	if ( peerblk->cipher_remaining & ( cipher->blocksize - 1 ) ) {
+		DBGC ( peerblk, "PEERBLK %p %d.%d has invalid length %zd\n",
+		       peerblk, peerblk->segment, peerblk->block,
+		       peerblk->cipher_remaining );
+		rc = -EINVAL;
+		goto err_blocksize;
+	}
 
 	/* Get the underlying data transfer buffer */
 	xferbuf = xfer_buffer ( &peerblk->xfer );
@@ -1197,6 +1193,7 @@ static void peerblk_decrypt ( struct peerdist_block *peerblk ) {
 	free ( data );
  err_alloc_data:
  err_xfer_buffer:
+ err_blocksize:
 	peerblk_done ( peerblk, rc );
 }
 
@@ -1283,6 +1280,7 @@ static void peerblk_expired ( struct retry_timer *timer, int over __unused ) {
 	struct peerdisc_segment *segment = peerblk->discovery.segment;
 	struct peerdisc_peer *head;
 	unsigned long now = peerblk_timestamp();
+	struct peerdist_retrieval *retrieval;
 	const char *location;
 	int rc;
 
@@ -1297,7 +1295,7 @@ static void peerblk_expired ( struct retry_timer *timer, int over __unused ) {
 
 	/* Profile download timeout, if applicable */
 	if ( ( peerblk->peer != NULL ) && ( timer->timeout != 0 ) ) {
-		profile_custom ( &peerblk_attempt_timeout_profiler,
+		profile_custom ( &peerblk_timeout_profiler,
 				 ( now - peerblk->attempted ) );
 		DBGC ( peerblk, "PEERBLK %p %d.%d timed out after %ld ticks\n",
 		       peerblk, peerblk->segment, peerblk->block,
@@ -1333,8 +1331,9 @@ static void peerblk_expired ( struct retry_timer *timer, int over __unused ) {
 	list_for_each_entry_continue ( peerblk->peer, &segment->peers, list ) {
 
 		/* Attempt retrieval protocol download from this peer */
+		retrieval = peerblk->peer->retrieval;
 		location = peerblk->peer->location;
-		if ( ( rc = peerblk_retrieval_open ( peerblk,
+		if ( ( rc = peerblk_retrieval_open ( peerblk, retrieval,
 						     location ) ) != 0 ) {
 			/* Non-fatal: continue to try next peer */
 			continue;

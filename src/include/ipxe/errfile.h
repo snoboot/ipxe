@@ -327,6 +327,7 @@ FILE_SECBOOT ( PERMITTED );
 #define ERRFILE_eap_md5			( ERRFILE_NET | 0x004d0000 )
 #define ERRFILE_eap_mschapv2		( ERRFILE_NET | 0x004e0000 )
 #define ERRFILE_syslogs			( ERRFILE_NET | 0x004f0000 )
+#define ERRFILE_pccrr			( ERRFILE_NET | 0x00500000 )
 
 #define ERRFILE_image		      ( ERRFILE_IMAGE | 0x00000000 )
 #define ERRFILE_elf		      ( ERRFILE_IMAGE | 0x00010000 )
@@ -455,6 +456,10 @@ FILE_SECBOOT ( PERMITTED );
 #define ERRFILE_crypto_null	      ( ERRFILE_OTHER | 0x006a0000 )
 #define ERRFILE_ffdhe		      ( ERRFILE_OTHER | 0x006b0000 )
 #define ERRFILE_cbc		      ( ERRFILE_OTHER | 0x006c0000 )
+#define ERRFILE_channel		      ( ERRFILE_OTHER | 0x006d0000 )
+#define ERRFILE_tlskey		      ( ERRFILE_OTHER | 0x006e0000 )
+#define ERRFILE_gcm		      ( ERRFILE_OTHER | 0x006f0000 )
+#define ERRFILE_tlsfmt		      ( ERRFILE_OTHER | 0x00700000 )
 
 /** @} */
 
